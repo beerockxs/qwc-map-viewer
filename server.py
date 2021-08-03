@@ -1,14 +1,16 @@
+import logging
 import os
 import requests
 
-from flask import Flask, request, Response, render_template, \
-    abort, json, send_from_directory, stream_with_context
+from flask import json, Flask, request, jsonify, redirect
 from flask_jwt_extended import jwt_optional, get_jwt_identity
 
 from qwc_services_core.jwt import jwt_manager
+from qwc_services_core.tenant_handler import TenantHandler, TenantPrefixMiddleware, TenantSessionInterface
 from qwc2_viewer import QWC2Viewer
-from origin_detector import OriginDetector
-import logging
+
+AUTH_PATH = os.environ.get('AUTH_PATH', '/auth')
+AUTH_REQUIRED = os.environ.get('AUTH_REQUIRED', '0') not in [0, "0", "False", "FALSE"]
 
 # Flask application
 app = Flask(__name__)
@@ -18,23 +20,18 @@ app.config['ERROR_404_HELP'] = False
 # Setup the Flask-JWT-Extended extension
 jwt = jwt_manager(app)
 
-# create QWC service
-qwc2_viewer = QWC2Viewer(app.logger)
+# create tenant handler
+tenant_handler = TenantHandler(app.logger)
 
-# path to QWC2 files and config
-qwc2_path = os.environ.get("QWC2_PATH", "qwc2/")
 
-try:
-    origin_config = json.loads(
-        os.environ.get(
-            'ORIGIN_CONFIG', '{"host": {"_intern_": "^127.0.0.1(:\\\\d+)?$"}}'
-        )
-    )
-except Exception as e:
-    app.logger.error("Could not load ORIGIN_CONFIG:\n%s" % e)
-    origin_config = {}
-
-origin_detector = OriginDetector(app.logger, origin_config)
+def qwc2_viewer_handler():
+    """Get or create a QWC2Viewer instance for a tenant."""
+    tenant = tenant_handler.tenant()
+    handler = tenant_handler.handler('mapViewer', 'qwc', tenant)
+    if handler is None:
+        handler = tenant_handler.register_handler(
+            'qwc', tenant, QWC2Viewer(tenant, app.logger))
+    return handler
 
 
 def with_no_cache_headers(response):
@@ -47,85 +44,77 @@ def with_no_cache_headers(response):
     response.headers["Expires"] = "0"
     return response
 
+app.wsgi_app = TenantPrefixMiddleware(app.wsgi_app)
+app.session_interface = TenantSessionInterface(os.environ)
+
+def auth_path_prefix():
+    return app.session_interface.tenant_path_prefix().rstrip("/") + "/" + AUTH_PATH.lstrip("/")
+
+@app.before_request
+@jwt_optional
+def assert_user_is_logged():
+    if AUTH_REQUIRED:
+        identity = get_jwt_identity()
+        if identity is None:
+            app.logger.info("Access denied, authentication required")
+            prefix = auth_path_prefix()
+            return redirect(prefix + '/login?url=%s' % request.url)
 
 # routes
 @app.route('/')
-@app.route('/<viewer>/')
-def index(viewer=None):
-    identity = origin_detector.detect(get_jwt_identity(), request)
-    return qwc2_viewer.qwc2_index(identity, viewer)
+def index():
+    qwc2_viewer = qwc2_viewer_handler()
+    return qwc2_viewer.qwc2_index(get_jwt_identity())
 
 
 @app.route('/config.json')
-@app.route('/<viewer>/config.json')
 @jwt_optional
-def qwc2_config(viewer=None):
-    identity = origin_detector.detect(get_jwt_identity(), request)
-    return with_no_cache_headers(qwc2_viewer.qwc2_config(identity, viewer))
+def qwc2_config():
+    qwc2_viewer = qwc2_viewer_handler()
+    return with_no_cache_headers(qwc2_viewer.qwc2_config(get_jwt_identity(), request.args))
 
 
 @app.route('/themes.json')
-@app.route('/<viewer>/themes.json')
 @jwt_optional
-def qwc2_themes(viewer=None):
-    identity = origin_detector.detect(get_jwt_identity(), request)
-    return with_no_cache_headers(qwc2_viewer.qwc2_themes(identity))
+def qwc2_themes():
+    qwc2_viewer = qwc2_viewer_handler()
+    return with_no_cache_headers(qwc2_viewer.qwc2_themes(get_jwt_identity()))
 
 
 @app.route('/assets/<path:path>')
-@app.route('/<viewer>/assets/<path:path>')
-def qwc2_assets(path, viewer=None):
-    return send_from_directory(os.path.join(qwc2_path, 'assets'), path)
+def qwc2_assets(path):
+    qwc2_viewer = qwc2_viewer_handler()
+    return qwc2_viewer.qwc2_assets(path)
 
 
 @app.route('/dist/<path:path>')
-@app.route('/<viewer>/dist/<path:path>')
-def qwc2_js(path, viewer=None):
-    return send_from_directory(os.path.join(qwc2_path, 'dist'), path)
+def qwc2_js(path):
+    qwc2_viewer = qwc2_viewer_handler()
+    return qwc2_viewer.qwc2_js(path)
 
 
 @app.route('/translations/<path:path>')
 def qwc2_translations(path):
-    return send_from_directory(os.path.join(qwc2_path, 'translations'), path)
+    qwc2_viewer = qwc2_viewer_handler()
+    return qwc2_viewer.qwc2_translations(path)
 
 
 @app.route('/favicon.ico')
 def favicon():
-    return send_from_directory(qwc2_path, 'favicon.ico')
+    qwc2_viewer = qwc2_viewer_handler()
+    return qwc2_viewer.qwc2_favicon()
 
 
-@app.route("/proxy", methods=['GET', 'POST', 'PUT', 'DELETE'])
-def proxy():
-    """Proxy
-    proxy?url=<url>&filename=<filename>
-    url: the url to proxy
-    filename: optional, if set it sets a content-disposition header with the
-              specified filename
-    """
-    if not app.debug:  # Allow only in debug mode
-        abort(403)
-    url = request.args.get('url')
-    filename = request.args.get('filename')
-    if request.method == 'POST':
-        headers = {'content-type': request.headers['content-type']}
-        res = requests.post(url, stream=True, timeout=30,
-                            data=request.get_data(), headers=headers)
-    elif request.method == 'PUT':
-        headers = {'content-type': request.headers['content-type']}
-        res = requests.put(url, stream=True, timeout=30,
-                           data=request.get_data(), headers=headers)
-    elif request.method == 'DELETE':
-        res = requests.delete(url, stream=True, timeout=10)
-    elif request.method == 'GET':
-        res = requests.get(url, stream=True, timeout=10)
-    else:
-        raise "Invalid operation"
-    response = Response(stream_with_context(res.iter_content(chunk_size=1024)),
-                        status=res.status_code)
-    if filename:
-        response.headers['content-disposition'] = 'filename=' + filename
-    response.headers['content-type'] = res.headers['content-type']
-    return response
+""" readyness probe endpoint """
+@app.route("/ready", methods=['GET'])
+def ready():
+    return jsonify({"status": "OK"})
+
+
+""" liveness probe endpoint """
+@app.route("/healthz", methods=['GET'])
+def healthz():
+    return jsonify({"status": "OK"})
 
 
 # local webserver

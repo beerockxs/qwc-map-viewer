@@ -1,11 +1,12 @@
+[![](https://github.com/qwc-services/qwc-map-viewer/workflows/build/badge.svg)](https://github.com/qwc-services/qwc-map-viewer/actions)
+[![](https://img.shields.io/docker/pulls/sourcepole/qwc-map-viewer-demo)](https://hub.docker.com/r/sourcepole/qwc-map-viewer-demo)
+
 QWC Map Viewer
 ==============
 
 Provide a [QWC2 Web Client](https://github.com/qgis/qwc2-demo-app) application using QWC services.
 
-**Note:** requires a QWC OGC service or QGIS server running on `$OGC_SERVICE_URL`, a 
-QWC Config service running on `$CONFIG_SERVICE_URL` and a QWC Data service running on 
-`$DATA_SERVICE_URL`
+**Note:** Requires a QWC OGC service or QGIS server running on `ogc_service_url`. Additional QWC Services are optional.
 
 
 Setup
@@ -17,121 +18,255 @@ Copy your QWC2 files from a production build (see [QWC2 Quick start](https://git
     mkdir $DSTDIR/qwc2 && mkdir $DSTDIR/qwc2/dist
     cd $SRCDIR && \
     cp -r assets $DSTDIR/qwc2 && \
-    cp -r translations $DSTDIR/qwc2 && \
+    cp -r translations $DSTDIR/qwc2/translations && \
     cp dist/QWC2App.js $DSTDIR/qwc2/dist/ && \
     cp index.html $DSTDIR/qwc2/ && \
     cp config.json $DSTDIR/qwc2/config.json && \
     cd -
 
-Copy your QWC2 themes config file:
-
-    cp themesConfig.json $DSTDIR/qwc2/
-
 
 Configuration
 -------------
 
-Configure the QWC2 application using your `config.json` file (see [Documentation](https://github.com/qgis/qwc2-demo-app/blob/master/doc/QWC2_Documentation.md#application-configuration-the-configjson-and-jsappconfigjs-files)).
+The static config and permission files are stored as JSON files in `$CONFIG_PATH` with subdirectories for each tenant,
+e.g. `$CONFIG_PATH/default/*.json`. The default tenant name is `default`.
+
+**Note:**: Custom viewers have been replaced by tenants in v2.
+
+### Map Viewer config
+
+* [JSON schema](schemas/qwc-map-viewer.json)
+* File location: `$CONFIG_PATH/<tenant>/mapViewerConfig.json`
+
+Example:
+```jsonc
+{
+  "$schema": "https://raw.githubusercontent.com/qwc-services/qwc-map-viewer/v2/schemas/qwc-map-viewer.json",
+  "service": "map-viewer",
+  "config": {
+    // path to QWC2 files
+    "qwc2_path": "qwc2/",
+    // QWC OGC service (required)
+    "ogc_service_url": "http://localhost:5013/",
+    // some optional QWC services
+    "auth_service_url": "http://localhost:5017/",
+    "data_service_url": "http://localhost:5012/"
+  },
+  "resources": {
+    "qwc2_config": {
+      // restricted menu items
+      "restricted_viewer_tasks": ["RasterExport"],
+
+      "config": {
+        // contents from QWC2 config.json
+        "assetsPath": "/assets",
+        // ...
+      }
+    },
+    "qwc2_themes": {
+      // contents from QWC2 themes.json
+      "themes": {
+        "items": [
+          {
+            "name": "qwc_demo",
+            "title": "Demo",
+            "url": "/ows/qwc_demo",
+            // ...
+            "sublayers": [
+              // ...
+            ]
+          }
+        ],
+        "backgroundLayers": [
+          // ...
+        ],
+        // ...
+      }
+    }
+  }
+}
+```
+
+All `config` options may be overridden by setting corresponding upper-case environment variables, e.g. `OGC_SERVICE_URL` for `ogc_service_url`.
+
+Main optional QWC services:
+ * `auth_service_url`: QWC Auth Service URL
+ * `data_service_url`: QWC Data Service URL
+ * `elevation_service_url`: QWC Elevation Service URL
+ * `info_service_url`: QWC FeatureInfo Service URL
+ * `legend_service_url`: QWC Legend Service URL
+ * `permalink_service_url`: QWC Permalink Service URL
+ * `print_service_url`: QWC Print Service URL
+ * `proxy_service_url`: Proxy Service URL
+ * `search_service_url`: QWC Search Service URL
+ * `search_data_service_url`: QWC Search Result Service URL
+
+`qwc2_config` contains the QWC2 application configuration, with `config` corresponding to the contents of your standalone `config.json` file (see [Documentation](https://github.com/qgis/qwc2-demo-app/blob/master/doc/QWC2_Documentation.md#application-configuration-the-configjson-and-jsappconfigjs-files)).
+
+`qwc2_themes` contains the full themes configuration, corresponding to the contents of your standalone `themes.json` collected from `themesConfig.json`.
 
 Add new themes to your `themesConfig.json` (see [Documentation](https://github.com/qgis/qwc2-demo-app/blob/master/doc/QWC2_Documentation.md#theme-configuration-qgis-projects-and-the-themesconfigjson-file)) and put any theme thumbnails into `$QWC2_PATH/assets/img/mapthumbs/`.
-The `themesConfig.json` file is used by the Config service to collect the full themes configuration using GetProjectSettings.
+The `themesConfig.json` file is used to collect the full themes configuration using GetProjectSettings.
 
 
-### Custom viewer configurations
+### Permissions
 
-Additional viewer configurations can be added by placing a `<viewer>.json` and/or `<viewer>.html` for each custom viewer into the `$QWC2_VIEWERS_PATH` directory. The custom viewers can be opened by appending the viewer name to the base URL: `http://localhost:5030/<viewer>/`.
+* File location: `$CONFIG_PATH/<tenant>/permissions.json`
 
-A custom `<viewer>.json` could e.g. contain a different set of menu items and tools.
-A custom `<viewer>.html` could e.g. show a different title and use a custom CSS.
-
-If a `<viewer>.json` or `<viewer>.html` is missing, the default `config.json` and `index.html` is used instead.
-
-
-### Sign in based on request origin
-
-The `AUTH_SERVICE_URL` is used by default for sign in and sign out.
-
-To differentiate e.g between intranet and internet, identity groups based on request origin and different auth service URLs can be configured:
-
-* `ORIGIN_CONFIG`: JSON with rules configuration
-
-    Match by request host:
-    ```json
+Example:
+```json
+{
+  "users": [
     {
-        "host": {
-            "<group name>": "<RegEx pattern for host from request>",
-            "_intern_": "^127.0.0.1(:\\\\d+)?$"
-        }
+      "name": "demo",
+      "groups": ["demo"],
+      "roles": []
     }
-    ```
-
-    Match by request IP:
-    ```json
+  ],
+  "groups": [
     {
-        "ip": {
-            "<group name>": "<RegEx pattern for IP from request>",
-            "_intern_": "^127.0.0.\\d{1,3}$"
-        }
+      "name": "demo",
+      "roles": ["demo"]
     }
-    ```
-
-    The origin detection can be based on the request host or IP by setting `host` or/and `ip` in `ORIGIN_CONFIG`. The first match is used as the identity group (`_public_` if nothing matched).
-
-* `AUTH_SERVICES_CONFIG`: JSON with lookup of auth service URLs for groups (with fallback to `AUTH_SERVICE_URL`)
-    ```json
+  ],
+  "roles": [
     {
-        "<group name>": "<auth service route or URL>",
-        "_intern_": "http://127.0.0.1:5017/"
+      "role": "public",
+      "permissions": {
+        "viewer_tasks": [],
+        "wms_services": [
+          {
+            "name": "qwc_demo",
+            "layers": [
+              {
+                "name": "qwc_demo"
+              },
+              {
+                "name": "edit_demo"
+              },
+              {
+                "name": "edit_points"
+              },
+              {
+                "name": "edit_lines"
+              },
+              {
+                "name": "edit_polygons"
+              },
+              {
+                "name": "geographic_lines"
+              },
+              {
+                "name": "country_names"
+              },
+              {
+                "name": "states_provinces"
+              },
+              {
+                "name": "countries"
+              },
+              {
+                "name": "bluemarble_bg"
+              },
+              {
+                "name": "osm_bg"
+              }
+            ],
+            "print_templates": ["A4 Landscape"]
+          }
+        ],
+        "background_layers": ["bluemarble", "mapnik"],
+        "data_datasets": [
+          {
+            "name": "qwc_demo.edit_points",
+            "attributes": [
+              "id", "name", "description", "num", "value", "type", "amount", "validated", "datetime"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "role": "demo",
+      "permissions": {
+        "viewer_tasks": ["RasterExport"]
+      }
     }
-    ```
+  ]
+}
+```
+
+* `viewer_tasks`: permitted menu items if any are restricted
+* `wms_services`: permitted WMS services, layers and print templates
+* `background_layers`: permitted background layers
+* `data_datasets`: permitted datasets for editing
+
+In this example, the _Raster Export_ map tool will only be visible for users with the role `demo`.
 
 
 Usage
 -----
 
-Set the `OGC_SERVICE_URL` environment variable to the QWC OGC service URL (or QGIS server URL)
-when starting this service. (default: `http://localhost:5013/` on
-qwc-ogc-service container)
-
-Set the `CONFIG_SERVICE_URL` environment variable to the QWC Config service URL
-when starting this service. (default: `http://localhost:5010/` on
-qwc-config-service container)
-
-Set the `DATA_SERVICE_URL` environment variable to the QWC Data service URL
-when starting this service. (default: `http://localhost:5012/` on
-qwc-data-service container)
-
-Set the `QWC2_PATH` environment variable to your QWC2 files path.
-
-Optionally:
-
- * Set the `QWC2_CONFIG` environment variable to your QWC2 `config.json` path if it is not located in `$QWC2_PATH`.
- * Set the `QWC2_VIEWERS_PATH` environment variable to your QWC2 custom viewers path (default: `$QWC2_PATH/viewers/`).
- * Set the `PERMALINK_SERVICE_URL` environment variable to the QWC permalink service URL.
- * Set the `ELEVATION_SERVICE_URL` environment variable to the QWC elevation service URL.
- * Set the `MAPINFO_SERVICE_URL` environment variable to the QWC map info service URL.
- * Set the `DOCUMENT_SERVICE_URL` environment variable to the QWC document service URL.
- * Set the `SEARCH_SERVICE_URL` environment variable to the QWC search service URL.
- * Set the `AUTH_SERVICE_URL` environment variable to the default QWC auth service URL.
- * Set the `INFO_SERVICE_URL` environment variable to the QWC feature info proxy service URL.
- * Set the `LEGEND_SERVICE_URL` environment variable to the QWC legend graphics proxy service URL.
- * Set the `PRINT_SERVICE_URL` environment variable to the QWC print proxy service URL.
- * Set the `ORIGIN_CONFIG` environment variable to your origin detection rules.
- * Set the `AUTH_SERVICES_CONFIG` environment variable to your auth service lookups.
-
+Set the `CONFIG_PATH` environment variable to the path containing the service config and permission files when starting this service (default: `config`).
 
 Base URL:
 
     http://localhost:5030/
 
-Custom viewer URL:
-
-    http://localhost:5030/<viewer>/
-
 Sample requests:
 
     curl 'http://localhost:5030/config.json'
     curl 'http://localhost:5030/themes.json'
+
+
+Docker usage
+------------
+
+### Run docker image
+
+To run this docker image you will need the following three additional services:
+
+* qwc-postgis
+* qwc-qgis-server
+* qwc-ogc-service
+* qwc-data-service
+
+Those services can be found under https://github.com/qwc-services/. The following steps explain how to download those services and how to run the `qwc-map-viewer` with `docker-compose`.
+
+**Step 1: Clone qwc-docker**
+
+    git clone https://github.com/qwc-services/qwc-docker
+    cd qwc-docker
+
+**Step 2: Create docker-compose.yml file**
+
+    cp docker-compose-example.yml docker-compose.yml
+
+**Step 3: Choose between a version of the qwc-map-viewer**
+
+#### qwc-map-viewer-demo
+
+This is the demo version used in the `docker-compose-example.yml` file. With this version, the docker image comes with a preinstalled version of the latest qwc2-demo-app build and the python application for the viewer. Use this docker image, if you don't have your own build of the QWC2 app.
+
+#### qwc-map-viewer-base
+
+If you want to use your own QWC2 build then this is the docker image that you want to use. This docker image comes with only the python application installed on. Here is an example, on how you can add you own QWC2 build to the docker image:
+
+```
+qwc-map-viewer:
+    image: sourcepole/qwc-map-viewer-base
+    ports:
+        - "127.0.0.1:5030:9090"
+    # Here you mount your own QWC2 build
+    volumes:
+        - /PATH_TO_QWC2_BUILD/:/qwc2:ro
+        - /PATH_TO_CONFIG:/srv/qwc_service/config:ro
+```
+**Step 4: Start docker containers**
+
+    docker-compose up qwc-map-viewer
+
+For more information please visit: https://github.com/qwc-services/qwc-docker
 
 
 Development
@@ -155,8 +290,4 @@ Install requirements:
 
 Start local service:
 
-    OGC_SERVICE_URL=http://localhost:5013/ CONFIG_SERVICE_URL=http://localhost:5010/ DATA_SERVICE_URL=http://localhost:5012/ QWC2_PATH=qwc2/ python server.py
-
-Start local service with local auth service config:
-
-    OGC_SERVICE_URL=http://localhost:5013/ CONFIG_SERVICE_URL=http://localhost:5010/ DATA_SERVICE_URL=http://localhost:5012/ QWC2_PATH=qwc2/ AUTH_SERVICES_CONFIG='{"_intern_": "http://127.0.0.1:5017/"}' AUTH_SERVICE_URL=http://localhost:5017/ python server.py
+    CONFIG_PATH=/PATH/TO/CONFIGS/ python server.py

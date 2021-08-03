@@ -1,0 +1,39 @@
+name: build
+
+on: [push]
+
+jobs:
+    build:
+      runs-on: ubuntu-latest
+      steps:
+
+      - uses: actions/checkout@master
+
+      - name: Get version tag
+        id: get_tag
+        run: |
+          if [ ${{ startsWith(github.ref, 'refs/tags/') }} = true ]; then
+            echo ::set-output name=tag::latest,${GITHUB_REF:10}
+          else
+            echo ::set-output name=tag::latest
+          fi
+
+      - name: Build and publish base container
+        uses: elgohr/Publish-Docker-Github-Action@2.12
+        with:
+          name: sourcepole/qwc-map-viewer-base
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+          tags: "${{ steps.get_tag.outputs.tag }}"
+
+      - name: Build and publish demo container
+        uses: elgohr/Publish-Docker-Github-Action@2.12
+        env:
+          QWC2_URL: https://github.com/qgis/qwc2-demo-app/releases/download/ci-latest-master/qwc2-demo-app.zip
+        with:
+          name: sourcepole/qwc-map-viewer-demo
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+          tags: "${{ steps.get_tag.outputs.tag }}"
+          dockerfile: Dockerfile-qwc2-app
+          buildargs: "QWC2_URL"
